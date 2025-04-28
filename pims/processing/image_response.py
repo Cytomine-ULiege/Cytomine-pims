@@ -12,7 +12,6 @@
 #  * See the License for the specific language governing permissions and
 #  * limitations under the License.
 from abc import ABC, abstractmethod
-from functools import lru_cache
 from typing import Dict, List, Optional, Tuple, Type, Union
 
 import numpy as np
@@ -23,7 +22,7 @@ from pims.api.utils.models import (
     AnnotationStyleMode, AssociatedName, ChannelReduction,
     Colorspace, GenericReduction, PointCross
 )
-from pims.files.image import Image
+from pims.files.file import Image
 from pims.filters import AbstractFilter
 from pims.processing.adapters import RawImagePixels
 from pims.processing.annotations import ParsedAnnotations
@@ -196,7 +195,6 @@ class ProcessedView(MultidimImageResponse, ABC):
                 self.threshold_processing or
                 self.log_processing)
 
-    @lru_cache(maxsize=None)
     def math_lut(self) -> Optional[StackedLookUpTables]:
         """
         Compute lookup table for math processing operations if any.
@@ -259,7 +257,6 @@ class ProcessedView(MultidimImageResponse, ABC):
                         and is_rgb_colormapping(self.colormaps))
         return False
 
-    @lru_cache(maxsize=None)
     def colormap_lut(self) -> Optional[StackedLookUpTables]:
         """
         Compute lookup table from colormaps if any.
@@ -292,7 +289,6 @@ class ProcessedView(MultidimImageResponse, ABC):
             ]
         )
 
-    @lru_cache(maxsize=None)
     def lut(self) -> Optional[StackedLookUpTables]:
         """
         The lookup table to apply combining all processing operations.

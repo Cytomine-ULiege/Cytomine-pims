@@ -11,17 +11,15 @@
 #  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  * See the License for the specific language governing permissions and
 #  * limitations under the License.
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from pims.api.utils.parameter import path2filepath
-
-
-def clean_filepath(filepath):
-    from pims.config import get_settings
-    return path2filepath(filepath, config=get_settings())
-
+if TYPE_CHECKING:
+    from pims.files.file import Path
 
 class ProblemException(Exception):
     def __init__(self, status, title=None, detail=None, **ext):
@@ -30,7 +28,11 @@ class ProblemException(Exception):
         self.detail = detail
         self.ext = ext
 
-
+class UploadCanceledException(Exception):
+    def __init__(self, message="Upload was canceled"):
+        self.message = message
+        super().__init__(self.message)
+        
 class BadRequestException(ProblemException):
     def __init__(self, title="Bad Request", detail=None, **ext):
         super().__init__(400, title, detail, **ext)
@@ -68,16 +70,16 @@ def add_problem_exception_handler(app: FastAPI):
 
 
 class FilepathNotFoundProblem(NotFoundException):
-    def __init__(self, filepath):
-        filepath = clean_filepath(filepath)
+    def __init__(self, filepath: Path):
+        filepath = filepath.public_filepath
         title = 'Filepath not found'
         detail = f'The filepath {filepath} does not exist.'
         super().__init__(title, detail)
 
 
 class NoAppropriateRepresentationProblem(NotFoundException):
-    def __init__(self, filepath, representation=None):
-        filepath = clean_filepath(filepath)
+    def __init__(self, filepath: Path, representation=None):
+        filepath = filepath.public_filepath
 
         title = 'No appropriate representation found'
         detail = f'The filepath {filepath} does not have an appropriate representation'
@@ -87,8 +89,8 @@ class NoAppropriateRepresentationProblem(NotFoundException):
 
 
 class NotADirectoryProblem(BadRequestException):
-    def __init__(self, filepath):
-        filepath = clean_filepath(filepath)
+    def __init__(self, filepath: Path):
+        filepath = filepath.public_filepath
 
         title = 'Not a directory'
         detail = f'The filepath {filepath} is not a directory'
@@ -96,8 +98,8 @@ class NotADirectoryProblem(BadRequestException):
 
 
 class NotAFileProblem(BadRequestException):
-    def __init__(self, filepath):
-        filepath = clean_filepath(filepath)
+    def __init__(self, filepath: Path):
+        filepath = filepath.public_filepath
 
         title = 'Not a file'
         detail = f'The filepath {filepath} is not a file'
@@ -105,8 +107,8 @@ class NotAFileProblem(BadRequestException):
 
 
 class NoMatchingFormatProblem(BadRequestException):
-    def __init__(self, filepath):
-        filepath = clean_filepath(filepath)
+    def __init__(self, filepath: Path):
+        filepath = filepath.public_filepath
 
         title = "No matching format found"
         detail = f"The filepath {filepath} is recognized by any of the available formats."
@@ -114,8 +116,8 @@ class NoMatchingFormatProblem(BadRequestException):
 
 
 class MetadataParsingProblem(BadRequestException):
-    def __init__(self, filepath, detail=None, **ext):
-        filepath = clean_filepath(filepath)
+    def __init__(self, filepath: Path, detail=None, **ext):
+        filepath = filepath.public_filepath
 
         title = "Metadata cannot be correctly understood."
         if detail is None:
@@ -124,8 +126,8 @@ class MetadataParsingProblem(BadRequestException):
 
 
 class PyramidParsingProblem(BadRequestException):
-    def __init__(self, filepath, detail=None, **ext):
-        filepath = clean_filepath(filepath)
+    def __init__(self, filepath: Path, detail=None, **ext):
+        filepath = filepath.public_filepath
 
         title = "Pyramid cannot be correctly understood"
         super().__init__(title, detail, **ext)

@@ -95,10 +95,7 @@ def install_python_plugins(plugins, install_path):
         print(f"Install {plugin['name']}")
 
         path = os.path.join(install_path, plugin["name"])
-        if os.path.exists(os.path.join(path, "requirements.txt")):
-            command = f"pip install --no-cache-dir -r requirements.txt"
-        else:
-            command = f"pip install --no-cache-dir -e ."
+        command = f"pip install --no-cache-dir -e ."
         output = subprocess.run(command, shell=True, check=True, cwd=path)
         print(output.stdout)
         print(output.stderr)
@@ -133,7 +130,7 @@ if __name__ == "__main__":
     plugins = enabled_plugins(load_plugin_list(params.plugin_csv_path))
 
     if params.method == Method.GENERATE_CHECKER_RESOLUTION_FILE:
-        if params.resolution_order_column in plugins[0]:
+        if len(plugins) > 0 and params.resolution_order_column in plugins[0]:
             generate_checker_resolution_file(
                 plugins,
                 params.checkerResolution_file_path,

@@ -28,8 +28,7 @@ from cytomine.models.collection import CollectionPartialUploadException
 
 from pims.api.utils.response import convert_quantity
 from pims.config import get_settings
-from pims.files.file import Path
-from pims.files.image import Image
+from pims.files.file import Path, Image
 from pims.formats import AbstractFormat
 from pims.utils.dtypes import dtype_to_bits
 from pims.utils.iterables import flatten
@@ -290,28 +289,33 @@ class CytomineListener(ImportListener):
 
     def end_unpacking(
         self, path: Path, unpacked_path: Path, *args,
-        format: AbstractFormat = None, is_collection: bool = False, **kwargs
+        format: AbstractFormat = None, is_collection: bool = False, delete_zip: bool = False, **kwargs
     ):
         parent = self.get_uf(path)
         parent.status = UploadedFile.UNPACKED
         parent.update()
+        # If archive is a collection and archive deletion is asked after unpacking, PIMS cannot take the
+        # responsibility to delete directly the archive uploaded file. Cytomine clients are asynchronous, so they
+        # may not be informed that the archive uploaded file status has been set as "unpacked"
 
         if not is_collection:
-            uf = UploadedFile()
+            uf = parent if delete_zip else UploadedFile()
             uf.status = UploadedFile.UPLOADED  # Better status ?
-            uf.contentType = format.get_identifier()  # TODO
+            uf.contentType = format.get_identifier()
             uf.size = unpacked_path.size
             uf.filename = str(unpacked_path.relative_to(FILE_ROOT_PATH))
             uf.originalFilename = str(format.main_path.name)
             uf.ext = ""
             uf.storage = parent.storage
             uf.user = parent.user
-            uf.parent = parent.id
+            uf.parent = None if delete_zip else parent.id
             uf.imageServer = parent.imageServer
             uf.save()
             self.path_uf_mapping[str(unpacked_path)] = uf
+            if delete_zip:
+                self.path_uf_mapping[str(path)] = uf
 
-    def register_file(self, path: Path, parent_path: Path, *args, **kwargs):
+    def register_file(self, path: Path, parent_path: Path, *args, delete_zip: bool = False, **kwargs):
         parent = self.get_uf(parent_path)
 
         uf = UploadedFile()
@@ -323,7 +327,7 @@ class CytomineListener(ImportListener):
         uf.ext = ""
         uf.storage = parent.storage
         uf.user = parent.user
-        uf.parent = parent.id
+        uf.parent = None if delete_zip else parent.id
         uf.imageServer = parent.imageServer
         uf.save()
         self.path_uf_mapping[str(path)] = uf
@@ -463,17 +467,6 @@ class CytomineListener(ImportListener):
                         )
                     )
         asc.save()
-
-        properties = PropertyCollection(ai)
-        for metadata in image.raw_metadata.values():
-            if metadata.value is not None and str(metadata.value) != '':
-                properties.append(
-                    Property(ai, metadata.namespaced_key, str(metadata.value))
-                )
-        try:
-            properties.save()
-        except CollectionPartialUploadException:
-            pass  # TODO: improve handling of this exception, but prevent to fail the import
 
         uf.status = UploadedFile.DEPLOYED
         uf.update()

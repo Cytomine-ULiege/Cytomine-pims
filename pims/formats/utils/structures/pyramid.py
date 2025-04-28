@@ -13,7 +13,6 @@
 #  * limitations under the License.
 from __future__ import annotations
 
-from functools import lru_cache
 from math import ceil
 from typing import List, Tuple, Union
 
@@ -210,8 +209,13 @@ class Pyramid:
             return self.base
 
         for i in range(1, self.n_levels):
-            if factor < self.tiers[i].average_factor:
-                return self.tiers[i - 1]
+            lower_bound = self.tiers[i-1].average_factor
+            upper_bound = self.tiers[i].average_factor
+            if lower_bound <= factor <= upper_bound:
+                if abs(factor - lower_bound) <  abs(factor - upper_bound):
+                    return self.tiers[i - 1]
+                else:
+                    return self.tiers[i]
 
         return self.tiers[self.n_levels - 1]
 
@@ -244,7 +248,7 @@ class Pyramid:
                and all([a == b for (a, b) in zip(o.tiers, self.tiers)])
 
 
-@lru_cache(maxsize=4096)
+
 def normalized_pyramid(width: int, height: int) -> Pyramid:
     """
     Build a normalized pyramid, with normalized tiles, i.e.

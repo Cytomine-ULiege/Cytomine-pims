@@ -16,12 +16,17 @@ import logging
 import os
 from functools import lru_cache
 
-from pydantic import BaseSettings, Extra
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger("pims.app")
 
 
 class ReadableSettings(BaseSettings):
+    model_config = SettingsConfigDict(extra="ignore")
+
+
+    api_base_path: str = ""  # if set, must start with /.
+
     root: str
     pending_path: str = "/tmp/uploaded"
     writing_path: str = "/data/pims/tmp"
@@ -29,16 +34,19 @@ class ReadableSettings(BaseSettings):
     default_image_size_safety_mode: str = "SAFE_REJECT"
     default_annotation_origin: str = "LEFT_TOP"
     output_size_limit: int = 10000
-    pims_url: str = "http://localhost-ims"
+    internal_url_core: str = "http://cytomine.local"
 
+    # Must be TRUE in production.
     cache_enabled: bool = True
     cache_url: str = "redis://pims-cache:6379"
-    cache_ttl_thumb: int = 60 * 60 * 24 * 15
-    cache_ttl_resized: int = 60 * 60 * 24 * 15
-    cache_ttl_tile: int = 60 * 60 * 24
-    cache_ttl_window: int = 60 * 60 * 24
-
-    memory_lru_cache_capacity: int = 500
+    # Must be TRUE in production. Helpful in dev or debug to disable caching of image metadata without disabling the cache.
+    cache_image_format_metadata: bool = True
+    # Must be TRUE in production. Helpful in dev or debug to disable caching of image responses without disabling the cache.
+    cache_image_responses: bool = True
+    # Must be TRUE in production.
+    cache_responses: bool = True
+    # The max-age to set in HTTP Cache-Control for cached image responses.
+    image_response_cache_control_max_age: int = 60 * 60 * 24
 
     task_queue_enabled: bool = True
     task_queue_url: str = "rabbitmq:5672"
@@ -46,29 +54,31 @@ class ReadableSettings(BaseSettings):
     max_pixels_complete_histogram: int = 1024 * 1024
     max_length_complete_histogram: int = 1024
 
-    vips_allow_leak: bool = False
-    vips_cache_max_items: int = 5000
-    vips_cache_max_memory: int = 300  # in MB
-    vips_cache_max_files: int = 500
+    # Maximum number of operations to cache
+    vips_cache_max_items: int = 100
+    # Maximum memory in MB to use for this cache
+    vips_cache_max_memory: int = 50
+    # Maximum number of files to hold open
+    vips_cache_max_files: int = 100
 
-    class Config:
-        extra = Extra.ignore
+    auto_delete_multi_file_format_archive: bool = True
+    auto_delete_collection_archive: bool = True
+    auto_delete_failed_upload: bool = True
 
 
 class Settings(ReadableSettings):
+    model_config = SettingsConfigDict(env_file="pims-config.env", env_file_encoding="utf-8")
+
+
     cytomine_public_key: str
     cytomine_private_key: str
 
     task_queue_user: str = "router"
     task_queue_password: str = "router"
 
-    class Config:
-        env_file = "pims-config.env"
-        env_file_encoding = "utf-8"
-
 
 @lru_cache()
 def get_settings():
     env_file = os.getenv("CONFIG_FILE", "pims-config.env")
-    logger.info(f"[green]Loading config from {env_file}")
+    logger.info(f"Loading config from {env_file}")
     return Settings(_env_file=env_file)

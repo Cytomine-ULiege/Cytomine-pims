@@ -13,15 +13,16 @@
 #  * limitations under the License.
 from typing import Optional
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, confloat, conint
+from fastapi import APIRouter
+from pydantic import BaseModel, Field
+from typing_extensions import Annotated
 
 from pims.api.exceptions import NotADirectoryProblem, check_path_existence
-from pims.api.utils.parameter import filepath2path
 from pims.api.utils.response import FastJsonResponse
-from pims.config import Settings, get_settings
+from pims.config import get_settings
+from pims.files.file import Path
 
-router = APIRouter()
+router = APIRouter(prefix=get_settings().api_base_path)
 api_tags = ['Housekeeping']
 
 
@@ -30,27 +31,27 @@ class DiskUsage(BaseModel):
         None,
         description='The mounting point of the file system having the directory.'
     )
-    mount_available_size: conint(ge=0) = Field(
+    mount_available_size: Annotated[int, Field(ge=0)] = Field(
         ...,
         description='Available space on the mounted file system having the directory, in bytes.',
     )
-    mount_total_size: conint(ge=0) = Field(
+    mount_total_size: Annotated[int, Field(ge=0)] = Field(
         ...,
         description='Total space on the mounted file system having the directory, in bytes.',
     )
-    mount_used_size: conint(ge=0) = Field(
+    mount_used_size: Annotated[int, Field(ge=0)] = Field(
         ...,
         description='Used space on the mounted file system having the directory, in bytes',
     )
-    mount_used_size_percentage: confloat(ge=0.0, le=100.0) = Field(
+    mount_used_size_percentage: Annotated[float, Field(ge=0.0, le=100.0)] = Field(
         ...,
         description='Percentage of used space regarding total space of the mounted file system',
     )
-    used_size: conint(ge=0) = Field(
+    used_size: Annotated[int, Field(ge=0)] = Field(
         ...,
         description='Used space by the directory, in bytes.'
     )
-    used_size_percentage: confloat(ge=0.0, le=100.0) = Field(
+    used_size_percentage: Annotated[float, Field(ge=0.0, le=100.0)] = Field(
         ...,
         description='Percentage of directory used space regarding total space of the mounted '
                     'file system',
@@ -78,14 +79,13 @@ def _serialize_usage(path):
     '/directory/{directorypath:path}/disk-usage', response_model=DiskUsage,
     tags=api_tags, response_class=FastJsonResponse
 )
-def show_path_usage(
+async def show_path_usage(
     directorypath: str,
-    config: Settings = Depends(get_settings)
 ) -> DiskUsage:
     """
     Directory disk usage
     """
-    path = filepath2path(directorypath, config)
+    path = Path.from_filepath(directorypath)
     check_path_existence(path)
     if not path.is_dir():
         raise NotADirectoryProblem(directorypath)
@@ -97,11 +97,11 @@ def show_path_usage(
     '/disk-usage', response_model=DiskUsage, tags=api_tags,
     response_class=FastJsonResponse
 )
-def show_disk_usage(config: Settings = Depends(get_settings)) -> DiskUsage:
+async def show_disk_usage() -> DiskUsage:
     """
     PIMS disk usage
     """
-    return _serialize_usage(filepath2path(".", config))
+    return _serialize_usage(Path.from_filepath("."))
 
 
 class DiskUsageLegacy(BaseModel):
@@ -117,11 +117,11 @@ class DiskUsageLegacy(BaseModel):
     '/storage/size.json', response_model=DiskUsageLegacy, tags=api_tags,
     response_class=FastJsonResponse
 )
-def show_disk_usage_v1(config: Settings = Depends(get_settings)):
+async def show_disk_usage_v1():
     """
     Get storage space (v1.x)
     """
-    data = _serialize_usage(filepath2path(".", config))
+    data = _serialize_usage(Path.from_filepath("."))
     return {
         "available": data.mount_available_size,
         "used": data.mount_used_size,

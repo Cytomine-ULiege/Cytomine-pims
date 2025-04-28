@@ -53,9 +53,8 @@ from pims.processing.region import Region
 from pims.utils.color import RED, WHITE
 from pims.utils.iterables import check_array_size_parameters, ensure_list
 
-router = APIRouter()
+router = APIRouter(prefix=get_settings().api_base_path)
 api_tags = ['Windows']
-cache_ttl = get_settings().cache_ttl_window
 
 
 @router.post('/image/{filepath:path}/window{extension:path}', tags=api_tags)
@@ -81,16 +80,13 @@ async def show_window_with_body(
     """
     return await _show_window(
         request, response,
-        path, **body.dict(),
+        path, **body.model_dump(serialize_as_any=True),
         extension=extension, headers=headers, config=config
     )
 
 
-@cache_image_response(
-    expire=cache_ttl,
-    vary=['config', 'request', 'response']
-)
-def _show_window(
+@cache_image_response()
+async def _show_window(
     request: Request, response: Response,  # required for @cache  # noqa
     path: Path,
     region: Union[Region, dict],
@@ -105,7 +101,7 @@ def _show_window(
     config: Settings,
     colormaps=None, c_reduction=ChannelReduction.ADD, z_reduction=None, t_reduction=None
 ):
-    in_image = path.get_spatial(cache=True)
+    in_image = await path.get_cached_spatial()
     check_representation_existence(in_image)
 
     if not isinstance(region, Region):

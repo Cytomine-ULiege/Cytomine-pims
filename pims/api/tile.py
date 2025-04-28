@@ -49,10 +49,9 @@ from pims.processing.colormaps import ALL_COLORMAPS
 from pims.processing.image_response import TileResponse, WindowResponse
 from pims.utils.iterables import check_array_size_parameters, ensure_list
 
-router = APIRouter()
+router = APIRouter(prefix=get_settings().api_base_path)
 tile_tags = ['Tiles']
 norm_tile_tags = ['Normalized tiles']
-cache_ttl = get_settings().cache_ttl_tile
 
 
 @router.post('/image/{filepath:path}/tile{extension:path}', tags=tile_tags)
@@ -78,7 +77,7 @@ async def show_tile_with_body(
     """
     return await _show_tile(
         request, response,
-        path, **body.dict(), normalized=False,
+        path, **body.model_dump(serialize_as_any=True), normalized=False,
         extension=extension, headers=headers, config=config
     )
 
@@ -106,13 +105,13 @@ async def show_tile_with_body(
     """
     return await _show_tile(
         request, response,
-        path, **body.dict(), normalized=True,
+        path, **body.model_dump(serialize_as_any=True), normalized=True,
         extension=extension, headers=headers, config=config
     )
 
 
-@cache_image_response(expire=cache_ttl, vary=['config', 'request', 'response'])
-def _show_tile(
+@cache_image_response()
+async def _show_tile(
     request: Request, response: Response,  # required for @cache  # noqa
     path: Path,
     normalized: bool,
@@ -122,123 +121,134 @@ def _show_tile(
     extension, headers, config,
     colormaps=None, c_reduction=ChannelReduction.ADD, z_reduction=None, t_reduction=None
 ):
-    in_image = path.get_spatial(cache=True)
-    check_representation_existence(in_image)
+    with await path.get_cached_spatial() as in_image:
+        check_representation_existence(in_image)
 
-    if not normalized or in_image.is_pyramid_normalized:
-        pyramid = in_image.pyramid
-        is_window = False
-    else:
-        pyramid = in_image.normalized_pyramid
-        is_window = True
+        if not normalized or in_image.is_pyramid_normalized:
+            pyramid = in_image.pyramid
+            is_window = False
+        else:
+            pyramid = in_image.normalized_pyramid
+            is_window = True
 
-    if 'zoom' in tile:
-        reference_tier_index = tile['zoom']
-        tier_index_type = TierIndexType.ZOOM
-    else:
-        reference_tier_index = tile['level']
-        tier_index_type = TierIndexType.LEVEL
+        if 'zoom' in tile:
+            reference_tier_index = tile['zoom']
+            tier_index_type = TierIndexType.ZOOM
+        else:
+            reference_tier_index = tile['level']
+            tier_index_type = TierIndexType.LEVEL
 
-    if 'ti' in tile:
-        check_tileindex_validity(
-            pyramid, tile['ti'],
-            reference_tier_index, tier_index_type
+        if 'ti' in tile:
+            check_tileindex_validity(
+                pyramid, tile['ti'],
+                reference_tier_index, tier_index_type
+            )
+            tile_region = pyramid.get_tier_at(
+                reference_tier_index, tier_index_type
+            ).get_ti_tile(tile['ti'])
+        else:
+            check_tilecoord_validity(
+                pyramid, tile['tx'], tile['ty'],
+                reference_tier_index, tier_index_type
+            )
+            tile_region = pyramid.get_tier_at(
+                reference_tier_index, tier_index_type
+            ).get_txty_tile(tile['tx'], tile['ty'])
+
+        out_format, mimetype = get_output_format(extension, headers.accept, VISUALISATION_MIMETYPES)
+        req_size = tile_region.width, tile_region.height
+        out_size = safeguard_output_dimensions(headers.safe_mode, config.output_size_limit, *req_size)
+        out_width, out_height = out_size
+
+        channels = ensure_list(channels)
+        z_slices = ensure_list(z_slices)
+        timepoints = ensure_list(timepoints)
+
+        channels = get_channel_indexes(in_image, channels)
+        check_reduction_validity(channels, c_reduction, 'channels')
+        z_slices = get_zslice_indexes(in_image, z_slices)
+        check_reduction_validity(z_slices, z_reduction, 'z_slices')
+        timepoints = get_timepoint_indexes(in_image, timepoints)
+        check_reduction_validity(timepoints, t_reduction, 'timepoints')
+
+        min_intensities = ensure_list(min_intensities)
+        max_intensities = ensure_list(max_intensities)
+        colormaps = ensure_list(colormaps)
+        filters = ensure_list(filters)
+        gammas = ensure_list(gammas)
+
+        array_parameters = ('min_intensities', 'max_intensities', 'colormaps', 'gammas')
+        check_array_size_parameters(
+            array_parameters, locals(), allowed=[0, 1, len(channels)], nullable=False
         )
-        tile_region = pyramid.get_tier_at(
-            reference_tier_index, tier_index_type
-        ).get_ti_tile(tile['ti'])
-    else:
-        check_tilecoord_validity(
-            pyramid, tile['tx'], tile['ty'],
-            reference_tier_index, tier_index_type
+        intensities = parse_intensity_bounds(
+            in_image, channels, z_slices, timepoints, min_intensities, max_intensities
         )
-        tile_region = pyramid.get_tier_at(
-            reference_tier_index, tier_index_type
-        ).get_txty_tile(tile['tx'], tile['ty'])
+        min_intensities, max_intensities = intensities
+        colormaps = parse_colormap_ids(colormaps, ALL_COLORMAPS, channels, in_image.channels)
+        gammas = parse_gammas(channels, gammas)
 
-    out_format, mimetype = get_output_format(extension, headers.accept, VISUALISATION_MIMETYPES)
-    req_size = tile_region.width, tile_region.height
-    out_size = safeguard_output_dimensions(headers.safe_mode, config.output_size_limit, *req_size)
-    out_width, out_height = out_size
-
-    channels = ensure_list(channels)
-    z_slices = ensure_list(z_slices)
-    timepoints = ensure_list(timepoints)
-
-    channels = get_channel_indexes(in_image, channels)
-    check_reduction_validity(channels, c_reduction, 'channels')
-    z_slices = get_zslice_indexes(in_image, z_slices)
-    check_reduction_validity(z_slices, z_reduction, 'z_slices')
-    timepoints = get_timepoint_indexes(in_image, timepoints)
-    check_reduction_validity(timepoints, t_reduction, 'timepoints')
-
-    min_intensities = ensure_list(min_intensities)
-    max_intensities = ensure_list(max_intensities)
-    colormaps = ensure_list(colormaps)
-    filters = ensure_list(filters)
-    gammas = ensure_list(gammas)
-
-    array_parameters = ('min_intensities', 'max_intensities', 'colormaps', 'gammas')
-    check_array_size_parameters(
-        array_parameters, locals(), allowed=[0, 1, len(channels)], nullable=False
-    )
-    intensities = parse_intensity_bounds(
-        in_image, channels, z_slices, timepoints, min_intensities, max_intensities
-    )
-    min_intensities, max_intensities = intensities
-    colormaps = parse_colormap_ids(colormaps, ALL_COLORMAPS, channels, in_image.channels)
-    gammas = parse_gammas(channels, gammas)
-
-    channels, min_intensities, max_intensities, colormaps, gammas = remove_useless_channels(
-        channels, min_intensities, max_intensities, colormaps, gammas
-    )
-
-    array_parameters = ('filters',)
-    check_array_size_parameters(
-        array_parameters, locals(), allowed=[0, 1], nullable=False
-    )
-    filters = parse_filter_ids(filters, FILTERS)
-
-    if is_window:
-        tile = WindowResponse(
-            in_image, channels, z_slices, timepoints,
-            tile_region, out_format, out_width, out_height,
-            c_reduction, z_reduction, t_reduction,
-            gammas, filters, colormaps, min_intensities, max_intensities, log,
-            8, threshold, Colorspace.AUTO
-        )
-    else:
-        tile = TileResponse(
-            in_image, channels, z_slices, timepoints,
-            tile_region, out_format, out_width, out_height,
-            c_reduction, z_reduction, t_reduction,
-            gammas, filters, colormaps, min_intensities, max_intensities, log,
-            threshold
+        channels, min_intensities, max_intensities, colormaps, gammas = remove_useless_channels(
+            channels, min_intensities, max_intensities, colormaps, gammas
         )
 
-    return tile.http_response(
-        mimetype,
-        extra_headers=add_image_size_limit_header(dict(), *req_size, *out_size)
-    )
+        array_parameters = ('filters',)
+        check_array_size_parameters(
+            array_parameters, locals(), allowed=[0, 1], nullable=False
+        )
+        filters = parse_filter_ids(filters, FILTERS)
+
+        if is_window:
+            tile = WindowResponse(
+                in_image, channels, z_slices, timepoints,
+                tile_region, out_format, out_width, out_height,
+                c_reduction, z_reduction, t_reduction,
+                gammas, filters, colormaps, min_intensities, max_intensities, log,
+                8, threshold, Colorspace.AUTO
+            )
+        else:
+            tile = TileResponse(
+                in_image, channels, z_slices, timepoints,
+                tile_region, out_format, out_width, out_height,
+                c_reduction, z_reduction, t_reduction,
+                gammas, filters, colormaps, min_intensities, max_intensities, log,
+                threshold
+            )
+
+        return tile.http_response(
+            mimetype,
+            extra_headers=add_image_size_limit_header(dict(), *req_size, *out_size)
+        )
 
 
 def zoom_query_parameter(
     zoom: int = PathParam(...)
 ):
-    return TargetZoom(__root__=zoom).dict()['__root__']
+    return TargetZoom(zoom).model_dump()
 
 
 def level_query_parameter(
     level: int = PathParam(...)
 ):
-    return TargetLevel(__root__=level).dict()['__root__']
+    return TargetLevel(level).model_dump()
 
 
 def ti_query_parameter(
     ti: int = PathParam(...)
 ):
-    return TileIndex(__root__=ti).dict()['__root__']
+    return TileIndex(ti).model_dump()
 
+
+def tx_query_parameter(
+    tx: int = PathParam(...)
+):
+    return TileX(tx).model_dump()
+
+
+def ty_query_parameter(
+    ty: int = PathParam(...)
+):
+    return TileY(ty).model_dump()
 
 @router.get(
     '/image/{filepath:path}/tile/zoom/{zoom:int}/ti/{ti:int}{extension:path}', tags=tile_tags
@@ -270,7 +280,6 @@ async def show_tile_by_zoom(
         extension=extension, headers=headers, config=config
     )
 
-
 @router.get(
     '/image/{filepath:path}/tile/level/{level:int}/ti/{ti:int}{extension:path}', tags=tile_tags
 )
@@ -301,6 +310,38 @@ async def show_tile_by_level(
         extension=extension, headers=headers, config=config
     )
 
+
+@router.get(
+    '/image/{filepath:path}/normalized-tile/zoom/{zoom:int}/tx/{tx:int}/ty/{ty:int}{extension:path}',
+    tags=norm_tile_tags
+)
+async def show_normalized_tile_by_xyz(
+    request: Request, response: Response,
+    path: Path = Depends(imagepath_parameter),
+    zoom: int = Depends(zoom_query_parameter),
+        tx: int = Depends(tx_query_parameter),
+        ty: int = Depends(ty_query_parameter),
+    extension: OutputExtension = Depends(extension_path_parameter),
+    planes: PlaneSelectionQueryParams = Depends(),
+    ops: ImageOpsDisplayQueryParams = Depends(),
+    headers: ImageRequestHeaders = Depends(),
+    config: Settings = Depends(get_settings),
+):
+    """
+    Get a 8-bit normalized tile at a given zoom level and tile index, optimized for
+    visualisation, with given channels, focal planes and timepoints. If multiple channels are
+    given (slice or selection), they are merged. If multiple focal planes or timepoints are
+    given (slice or selection), a reduction function must be provided.
+
+    **By default**, all image channels are used and when the image is multidimensional, the
+    tile is extracted from the median focal plane at first timepoint.
+    """
+    tile = dict(zoom=zoom, tx=tx, ty=ty)
+    return await _show_tile(
+        request, response,
+        path, True, tile, **planes.dict(), **ops.dict(),
+        extension=extension, headers=headers, config=config
+    )
 
 @router.get(
     '/image/{filepath:path}/normalized-tile/zoom/{zoom:int}/ti/{ti:int}{extension:path}',
@@ -381,12 +422,12 @@ async def show_tile_v1(
     """
     Get a tile using IMS V1.x specification.
     """
-    zoom = TargetZoom(__root__=z)
-    tx, ty = TileX(__root__=x), TileY(__root__=y)
+    zoom = TargetZoom(z)
+    tx, ty = TileX(x), TileY(y)
     tile = TargetZoomTileCoordinates(zoom=zoom, tx=tx, ty=ty)
     return await _show_tile(
         request, response,
-        imagepath_parameter(zoomify, config),
+        imagepath_parameter(zoomify),
         normalized=True,
         tile=tile.dict(),
         channels=None, z_slices=None, timepoints=None,
@@ -414,15 +455,15 @@ async def show_tile_v2(
     """
     Get a tile using IMS V2.x specification.
     """
-    zoom = TargetZoom(__root__=z)
+    zoom = TargetZoom(z)
     if all(i is not None for i in (zoomify, tile_group, x, y)):
-        tx, ty = TileX(__root__=x), TileY(__root__=y)
+        tx, ty = TileX(x), TileY(y)
         tile = TargetZoomTileCoordinates(zoom=zoom, tx=tx, ty=ty)
-        path = imagepath_parameter(zoomify, config)
+        path = imagepath_parameter(zoomify)
     elif all(i is not None for i in (fif, z, tile_index)):
-        ti = TileIndex(__root__=tile_index)
+        ti = TileIndex(tile_index)
         tile = TargetZoomTileIndex(zoom=zoom, ti=ti)
-        path = imagepath_parameter(fif, config)
+        path = imagepath_parameter(fif)
     else:
         raise BadRequestException(detail="Incoherent set of parameters.")
 
